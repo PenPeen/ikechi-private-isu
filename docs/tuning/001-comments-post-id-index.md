@@ -71,4 +71,52 @@ Rank 2 の `SELECT COUNT(*) FROM comments WHERE post_id = ?` も先頭カラム�
 
 ## 適用後の計測
 
-未実施。ベンチマーカー再実行後に追記する。
+ベンチマーカーのスコアは 1287 → 14496（11.3倍）。fail は 0 のまま。
+
+### EXPLAIN
+
+| 列 | 適用前 | 適用後 |
+|---|---|---|
+| `type` | `ALL` | `ref` |
+| `key` | `NULL` | `idx_post_id_created_at` |
+| `rows` | 99147 | 1 |
+| `filtered` | 10.00 | 100.00 |
+| `Extra` | `Using where; Using filesort` | `Backward index scan` |
+
+`ORDER BY created_at DESC` はインデックスの逆順走査で処理され、filesort が消えた。Rank 2 の `COUNT(*)` は `Using index` になり、テーブル本体を読まなくなった。
+
+### 対象クエリ（旧 Rank 1）
+
+| | 適用前 | 適用後 |
+|---|---|---|
+| Rank | 1 | 8 |
+| 応答時間の割合 | 67.2% | 4.4% |
+| 実行回数 | 2,383 | 25,808 |
+| 合計実行時間 | 42s | 685ms |
+| 1回あたり | 17.8ms | 26µs |
+| Rows examine（avg） | 97,670 | 0.74 |
+
+呼ばれる回数が10.8倍に増えたにもかかわらず、合計時間は62分の1。Rows examine が Rows sent と同値になり、無駄読みが消えた。
+
+旧 Rank 2 の `SELECT COUNT(*) FROM comments WHERE post_id = ?` も 28.1% → 4.7%、Rows examine は 97,660 → 2.56 になった。
+
+### 全体
+
+| | 適用前 | 適用後 |
+|---|---|---|
+| クエリ総数 | 42.52k | 347.32k |
+| Exec time 合計 | 63s | 16s |
+| Rows sent | 984.84k | 11.24M |
+| Rows examine | 468.58M | 49.39M |
+
+返した行が11倍に増えた一方で、読んだ行は9分の1以下。examine / sent 比は 476倍 → 4.4倍。
+
+## 次の対象
+
+```
+# Rank Query ID                            Response time Calls  R/Call V/M
+#    1 0x1CD48AE21E9C97BE44D0B06948A2E5CC   4.8677 31.1%   1062 0.0046  0.00 SELECT posts
+#    2 0xDA556F9115773A1A99AA0165670CE848   2.7237 17.4% 115427 0.0000  0.00 ADMIN PREPARE
+```
+
+Rank 1 は `SELECT id, user_id, body, created_at, mime FROM posts ORDER BY created_at DESC` で、LIMIT なしで全件取得している。
