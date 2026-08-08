@@ -1,6 +1,7 @@
 vendor/
 portal/log
 portal/tmp
+slow.log
 
 ### Portal
 # Ignore bundler config.
